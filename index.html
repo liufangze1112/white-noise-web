@@ -1,0 +1,2267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<!-- 移动端视口配置：viewport-fit=cover 让页面延伸到 iPhone 刘海屏区域 -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<!-- 手机浏览器地址栏/状态栏配色（暗色主题） -->
+<meta name="theme-color" content="#0d1117">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>白噪音 · 助眠音效</title>
+
+<style>
+/* =========================================================
+   1. 全局样式与 CSS 变量（暗色主题配色）
+   ========================================================= */
+:root {
+    --bg: #0d1117;                              /* 页面背景色（深灰蓝） */
+    --card: #161c29;                            /* 音效卡片背景色 */
+    --text: #e6eaf4;                            /* 主文字颜色 */
+    --muted: #8a93a8;                           /* 次要文字颜色 */
+    --timer-accent: #e8a24a;                    /* 定时功能的强调色（暖琥珀色） */
+    /* 基础光晕的三个渐变颜色（夜间模式下调暗，避免睡前刺眼） */
+    --glow-1: rgba(86, 120, 220, .14);
+    --glow-2: rgba(140, 100, 210, .10);
+    --glow-3: rgba(40, 140, 180, .08);
+}
+
+/* 夜间模式：更暗的睡前亮度，只降低底色与光晕，不压暗文字和控件（默认开启，可关闭） */
+html.night-mode {
+    --bg: #05070c;
+    --card: #0d121c;
+    --glow-1: rgba(86, 120, 220, .07);
+    --glow-2: rgba(140, 100, 210, .05);
+    --glow-3: rgba(40, 140, 180, .04);
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;   /* 去掉移动端点击时的高亮块 */
+}
+
+html {
+    background: var(--bg);
+    -webkit-text-size-adjust: 100%;             /* 禁止手机横屏时自动放大文字 */
+    color-scheme: dark;                         /* 原生控件（数字输入框等）跟随暗色主题 */
+    transition: background .5s;                 /* 夜间模式切换时底色平滑过渡 */
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                 "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    color: var(--text);
+    min-height: 100vh;
+    background: transparent;
+    /* touch-action 优化：减少移动端点击延迟与双击缩放 */
+    touch-action: manipulation;
+}
+
+/* 背景呼吸光晕：缓慢变化的彩色径向渐变，营造夜间氛围（CSS3 动画） */
+body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background:
+        radial-gradient(60% 45% at 50% 0%, var(--glow-1), transparent 70%),
+        radial-gradient(45% 40% at 85% 100%, var(--glow-2), transparent 70%),
+        radial-gradient(40% 35% at 10% 90%, var(--glow-3), transparent 70%);
+    animation: bgFloat 18s ease-in-out infinite alternate;
+}
+@keyframes bgFloat {
+    from { opacity: .7; transform: scale(1); }
+    to   { opacity: 1;  transform: scale(1.06); }
+}
+
+/* 键盘操作时的焦点轮廓（夜间模式下也要清晰可见） */
+:focus-visible {
+    outline: 2px solid var(--timer-accent);
+    outline-offset: 2px;
+}
+
+/* =========================================================
+   动态氛围背景层：随播放音效渐显的微弱光晕（雨夜蓝光 / 暖炉火光）
+   透明度由 JS 实时写入，动画仅做极小幅度 CSS 漂移，不占 JS 线程
+   ========================================================= */
+.ambient-bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    overflow: hidden;
+}
+.ambient-layer {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    transition: opacity 1.2s ease;
+}
+.ambient-layer--night {
+    background: radial-gradient(70% 50% at 50% -10%, rgba(90, 135, 225, .16), transparent 70%);
+}
+.ambient-layer--rain {
+    background: radial-gradient(80% 55% at 50% 0%, rgba(70, 110, 200, .15), transparent 72%);
+}
+.ambient-layer--warm {
+    background: radial-gradient(70% 55% at 50% 105%, rgba(224, 120, 60, .16), transparent 70%);
+}
+/* 仅在对应光晕激活时启动漂移动画（类由 JS 按播放状态切换） */
+body.ambient-night-active .ambient-layer--night,
+body.ambient-rain-active .ambient-layer--rain {
+    animation: ambientDrift 26s ease-in-out infinite alternate;
+}
+body.ambient-warm-active .ambient-layer--warm {
+    animation: ambientWarm 9s ease-in-out infinite alternate;
+}
+@keyframes ambientDrift {
+    from { transform: translateY(0) scale(1); }
+    to   { transform: translateY(-1.5%) scale(1.03); }
+}
+@keyframes ambientWarm {
+    from { transform: scale(1); }
+    to   { transform: scale(1.05); }
+}
+
+/* 应用主体：手机上全宽，桌面上居中限宽 */
+.app {
+    position: relative;    /* 置于动态背景层之上 */
+    z-index: 1;
+    width: 100%;
+    max-width: 520px;
+    margin: 0 auto;
+    padding: 28px 16px calc(24px + env(safe-area-inset-bottom)); /* 底部留出 iPhone 安全区 */
+}
+
+/* =========================================================
+   2. 顶部标题区
+   ========================================================= */
+header {
+    text-align: center;
+    padding-bottom: 6px;
+}
+.logo {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+.logo-icon { font-size: 26px; }
+h1 {
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    /* 渐变文字（CSS3 background-clip） */
+    background: linear-gradient(90deg, #cdd7ee, #8ea4d8);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+.subtitle {
+    margin-top: 8px;
+    font-size: 13px;
+    color: var(--muted);
+    transition: color .3s;
+}
+
+/* 全局一键暂停 / 继续按钮 */
+.master-btn {
+    margin-top: 14px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 22px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, .18);
+    background: rgba(255, 255, 255, .05);
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background .25s, border-color .25s, opacity .25s;
+}
+.master-btn:active { transform: scale(.97); }
+.master-btn:disabled { opacity: .35; cursor: default; transform: none; }
+.master-btn.playing {
+    border-color: rgba(255, 255, 255, .35);
+    background: rgba(255, 255, 255, .1);
+}
+.night-mode-btn { margin-left: 8px; }
+
+/* =========================================================
+   3. 音效卡片区（2 列网格，适配手机）
+   ========================================================= */
+.sound-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;   /* 两列布局，手机上也一目了然 */
+    gap: 14px;
+    margin-top: 24px;
+    align-items: start;               /* 某张卡片展开音色面板时，不拉高同行的另一张 */
+}
+
+/* 每种音效通过 data-sound 属性配置自己的强调色 */
+.sound-card[data-sound="rain"]      { --accent: #5b8def; --accent-soft: rgba(91, 141, 239, .22); }
+.sound-card[data-sound="forest"]    { --accent: #4ec98f; --accent-soft: rgba(78, 201, 143, .22); }
+.sound-card[data-sound="ocean"]     { --accent: #35c3d8; --accent-soft: rgba(53, 195, 216, .22); }
+.sound-card[data-sound="insects"]   { --accent: #a6d95a; --accent-soft: rgba(166, 217, 90, .22); }   /* 萤火虫般的黄绿色 */
+.sound-card[data-sound="fireplace"] { --accent: #f0784a; --accent-soft: rgba(240, 120, 74, .22); }   /* 炭火般的暖橙红 */
+.sound-card[data-sound="white"]     { --accent: #d8dde8; --accent-soft: rgba(216, 221, 232, .18); }  /* 白噪音：冷白 */
+.sound-card[data-sound="pink"]      { --accent: #f08cb4; --accent-soft: rgba(240, 140, 180, .22); }  /* 粉红噪音：柔粉 */
+.sound-card[data-sound="brown"]     { --accent: #c99464; --accent-soft: rgba(201, 148, 100, .22); }  /* 棕噪音：暖棕 */
+
+/* 分组标题：自然音效 / 彩色噪声 */
+.group-title {
+    margin-top: 26px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 1px;
+}
+.group-title + .sound-grid { margin-top: 12px; }
+
+/* 卡片分类标签：自然 / 暖氛围 / 纯色噪声（由 JS 按音效元数据注入） */
+.sound-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 8px;
+}
+.sound-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    line-height: 1.6;
+    color: var(--muted);
+    background: rgba(255, 255, 255, .06);
+    border: 1px solid rgba(255, 255, 255, .08);
+}
+.sound-tag[data-category="natural"]     { color: #7fd6a5; border-color: rgba(78, 201, 143, .35); }
+.sound-tag[data-category="warm"]        { color: #f0a882; border-color: rgba(240, 120, 74, .35); }
+.sound-tag[data-category="color-noise"] { color: #c9d3e5; border-color: rgba(216, 221, 232, .25); }
+
+.sound-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    padding: 16px 16px 12px;
+    border-radius: 20px;
+    background: linear-gradient(160deg, rgba(255, 255, 255, .05), rgba(255, 255, 255, .015)), var(--card);
+    border: 1px solid rgba(255, 255, 255, .08);
+    cursor: pointer;
+    user-select: none;
+    transition: border-color .35s, box-shadow .35s, transform .15s;
+}
+.sound-card:active { transform: scale(.98); }          /* 按下的反馈 */
+
+/* 卡片总数为奇数时（当前 5 张），最后一张横跨整行，保持两列布局平衡 */
+.sound-card:last-child:nth-child(odd) { grid-column: 1 / -1; }
+
+/* 播放中的卡片：点亮边框与柔光 */
+.sound-card.playing {
+    border-color: var(--accent);
+    box-shadow: 0 6px 26px var(--accent-soft);
+}
+@media (hover: hover) {
+    .sound-card:hover { border-color: rgba(255, 255, 255, .2); }
+}
+
+/* 卡片头部：图标 + 名称（左），开关按钮（右） */
+.card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.card-info {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+}
+.icon {
+    font-size: 30px;
+    line-height: 1;
+    display: inline-block;
+    /* 未播放时图标置灰 */
+    filter: grayscale(1);
+    opacity: .5;
+    transition: filter .4s, opacity .4s;
+}
+.sound-card.playing .icon {
+    filter: none;
+    opacity: 1;
+    animation: float 3.2s ease-in-out infinite;  /* 播放时图标轻轻浮动 */
+}
+@keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-4px); }
+}
+h3 {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: .5px;
+    white-space: nowrap;
+}
+
+/* 圆形开关按钮：暂停时显示三角形，播放时显示双竖条 */
+.toggle {
+    width: 46px;
+    height: 46px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    border: 1.5px solid rgba(255, 255, 255, .25);
+    background: transparent;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background .3s, border-color .3s, box-shadow .3s;
+}
+.ico-play {                                     /* CSS 三角形播放图标 */
+    width: 0;
+    height: 0;
+    border-top: 8px solid transparent;
+    border-bottom: 8px solid transparent;
+    border-left: 13px solid currentColor;
+    margin-left: 4px;
+}
+.ico-pause { display: none; gap: 4px; }         /* 双竖条暂停图标 */
+.ico-pause i {
+    width: 4px;
+    height: 14px;
+    background: currentColor;
+    border-radius: 1px;
+    display: block;
+}
+.sound-card.playing .ico-play  { display: none; }
+.sound-card.playing .ico-pause { display: flex; }
+.sound-card.playing .toggle {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #0d1117;
+    box-shadow: 0 0 18px var(--accent-soft);
+}
+
+/* 跳动均衡器：播放时显示 4 根律动的小柱（纯 CSS3 动画） */
+.eq {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 16px;
+    margin-top: 10px;
+    opacity: 0;
+    transition: opacity .3s;
+}
+.eq span {
+    flex: 1;
+    max-width: 4px;
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    transform: scaleY(.2);
+    transform-origin: bottom;
+}
+.sound-card.playing .eq { opacity: 1; }
+.sound-card.playing .eq span {
+    animation: eqJump .8s ease-in-out infinite alternate;
+}
+.eq span:nth-child(2) { animation-delay: .25s; }
+.eq span:nth-child(3) { animation-delay: .45s; }
+.eq span:nth-child(4) { animation-delay: .15s; }
+@keyframes eqJump {
+    from { transform: scaleY(.2); }
+    to   { transform: scaleY(1); }
+}
+
+/* =========================================================
+   4. 音量滑块（自定义样式，双端兼容）
+   ========================================================= */
+.vol {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 20px;
+    padding: 8px 0;                       /* 增大触摸热区 */
+    margin-top: 8px;
+    border-radius: 2px;
+    cursor: pointer;
+    outline: none;
+    /* 轨道：左侧已填充强调色（--fill 由 JS 动态更新），右侧灰色 */
+    background: linear-gradient(to right,
+        var(--accent) 0 var(--fill, 70%),
+        rgba(255, 255, 255, .15) var(--fill, 70%) 100%
+    ) no-repeat center / 100% 4px;
+}
+.vol::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #fff;
+    border: none;
+    box-shadow: 0 1px 5px rgba(0, 0, 0, .6);
+}
+/* Firefox 需要单独绘制轨道与滑块 */
+@supports (-moz-appearance: none) {
+    .vol { background: transparent; }
+    .vol::-moz-range-track {
+        height: 4px;
+        border-radius: 2px;
+        background: linear-gradient(to right,
+            var(--accent) 0 var(--fill, 70%),
+            rgba(255, 255, 255, .15) var(--fill, 70%) 100%);
+    }
+    .vol::-moz-range-thumb {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: #fff;
+        border: none;
+        box-shadow: 0 1px 5px rgba(0, 0, 0, .6);
+    }
+}
+
+/* 音色细调面板（低频 / 高频滑块），点击卡片内「音色调节」展开 */
+.tone-btn {
+    align-self: flex-start;
+    margin-top: 4px;
+    padding: 4px 0;
+    border: none;
+    background: none;
+    color: var(--muted);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: color .25s;
+}
+.tone-btn.tuned { color: var(--accent); }        /* 音色被调整过时高亮提示 */
+.tone {
+    display: none;
+    margin-top: 4px;
+    padding: 8px 12px 6px;
+    border-radius: 12px;
+    background: rgba(0, 0, 0, .2);
+}
+.sound-card.tone-open .tone { display: block; animation: fadeIn .3s ease; }
+/* 每行：上方「名称 + 数值」，下方整行滑块（手机两列卡片较窄，竖排更好拖动） */
+.tone-head {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--muted);
+}
+.tone-val { font-variant-numeric: tabular-nums; }
+.tone .vol { margin-top: 0; }
+.tone-reset {
+    display: block;
+    margin: 2px 0 0 auto;
+    padding: 4px 0;
+    border: none;
+    background: none;
+    color: var(--muted);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+/* =========================================================
+   5. 定时关闭区
+   ========================================================= */
+.timer {
+    margin-top: 30px;
+    padding: 18px 16px;
+    border-radius: 20px;
+    background: rgba(255, 255, 255, .03);
+    border: 1px solid rgba(255, 255, 255, .07);
+}
+.timer h2, .presets h2 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 1px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.chips {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+}
+.chip {
+    flex: 1;
+    padding: 11px 0;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, .14);
+    background: transparent;
+    color: var(--muted);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    user-select: none;
+    transition: all .25s;
+}
+.chip.active {
+    background: var(--timer-accent);
+    border-color: var(--timer-accent);
+    color: #1a1206;
+    font-weight: 600;
+}
+.chip-cancel { border-style: dashed; }
+.chip-cancel.enabled {
+    color: #f08c8c;
+    border-color: rgba(240, 140, 140, .5);
+}
+
+/* 自定义定时：分钟数输入框 + 开始按钮 */
+.custom-timer {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+.custom-input {
+    flex: 1;
+    min-width: 0;
+    padding: 11px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, .14);
+    background: rgba(255, 255, 255, .04);
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color .25s;
+    appearance: textfield;                      /* 隐藏数字微调按钮（标准属性 + Firefox 前缀） */
+    -moz-appearance: textfield;
+}
+.custom-input::-webkit-outer-spin-button,
+.custom-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;                   /* 隐藏数字微调按钮，视觉更干净 */
+    margin: 0;
+}
+.custom-input:focus { border-color: rgba(255, 255, 255, .35); }
+.custom-input::placeholder { color: rgba(138, 147, 168, .7); }
+.custom-timer .chip { flex: 0 0 auto; padding: 11px 16px; }
+
+/* =========================================================
+   6. 预设组合区（保存 / 一键加载混音方案）
+   ========================================================= */
+.presets {
+    margin-top: 16px;
+    padding: 18px 16px;
+    border-radius: 20px;
+    background: rgba(255, 255, 255, .03);
+    border: 1px solid rgba(255, 255, 255, .07);
+}
+.preset-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 12px;
+}
+.preset-empty {
+    font-size: 13px;
+    color: var(--muted);
+    text-align: center;
+    padding: 4px 0 2px;
+}
+.preset-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, .05);
+    border: 1px solid rgba(255, 255, 255, .08);
+}
+.preset-info { flex: 1; min-width: 0; }
+.preset-name {
+    display: block;
+    font-size: 14px;
+    font-weight: 600;
+}
+.preset-desc {
+    display: block;
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.preset-load {
+    flex-shrink: 0;
+    padding: 8px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, .14);
+    background: transparent;
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all .25s;
+}
+.preset-load:active { transform: scale(.96); }
+.preset-del {
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--muted);
+    font-size: 14px;
+    cursor: pointer;
+    transition: color .25s;
+}
+.preset-del:hover { color: #f08c8c; }
+.preset-save {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+.preset-input {
+    flex: 1;
+    min-width: 0;
+    padding: 11px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, .14);
+    background: rgba(255, 255, 255, .04);
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color .25s;
+}
+.preset-input:focus { border-color: rgba(255, 255, 255, .35); }
+.preset-input::placeholder { color: rgba(138, 147, 168, .7); }
+.preset-save .chip {
+    flex: 0 0 auto;
+    padding: 11px 16px;
+    color: var(--text);
+    border-color: rgba(255, 255, 255, .3);
+}
+/* 倒计时文字：默认隐藏，设置定时后显示 */
+.countdown {
+    display: none;
+    margin-top: 14px;
+    text-align: center;
+    font-size: 14px;
+    color: var(--timer-accent);
+    font-variant-numeric: tabular-nums;   /* 数字等宽，跳动时不抖动 */
+    animation: fadeIn .4s ease;
+}
+.countdown.show { display: block; }
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* =========================================================
+   7. 底部说明与提示气泡
+   ========================================================= */
+.foot {
+    margin-top: 22px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.8;
+}
+
+/* 轻提示气泡（toast） */
+.toast {
+    position: fixed;
+    left: 50%;
+    bottom: calc(28px + env(safe-area-inset-bottom));
+    transform: translate(-50%, 16px);
+    max-width: 86vw;
+    background: rgba(28, 33, 48, .96);
+    border: 1px solid rgba(255, 255, 255, .12);
+    color: #dfe5f2;
+    padding: 11px 20px;
+    border-radius: 999px;
+    font-size: 13px;
+    text-align: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .3s, transform .3s;
+    z-index: 99;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, .5);
+}
+.toast.show {
+    opacity: 1;
+    transform: translate(-50%, 0);
+}
+
+/* 用户系统开启"减弱动态效果"时，关闭所有动画（无障碍优化） */
+@media (prefers-reduced-motion: reduce) {
+    * {
+        animation-duration: .01ms !important;
+        transition-duration: .01ms !important;
+    }
+    /* 动态背景层：光晕保持静态，透明度直接切换 */
+    .ambient-layer {
+        animation: none !important;
+        transition: none !important;
+    }
+}
+</style>
+</head>
+
+<body>
+<!-- 动态氛围背景层：随播放音效渐显的微弱光晕（雨夜蓝光 / 暖炉火光），透明度由 JS 控制 -->
+<div class="ambient-bg" aria-hidden="true">
+    <div class="ambient-layer ambient-layer--night"></div>
+    <div class="ambient-layer ambient-layer--rain"></div>
+    <div class="ambient-layer ambient-layer--warm"></div>
+</div>
+<div class="app">
+    <!-- ===== 顶部标题 ===== -->
+    <header>
+        <div class="logo">
+            <span class="logo-icon">🌙</span>
+            <h1>白噪音</h1>
+        </div>
+        <p class="subtitle" id="status">选择音效，可多选叠加播放</p>
+        <!-- 全局一键暂停 / 继续：暂停时记住正在播放的音效，继续时原样恢复 -->
+        <button class="master-btn" id="masterBtn" type="button" disabled>⏸ 全部暂停</button>
+        <button class="master-btn night-mode-btn" id="nightModeBtn" type="button" aria-pressed="true">🌙 夜间模式</button>
+    </header>
+
+    <!-- ===== 音效卡片区：每种音效 = 图标 + 名称 + 开关 + 均衡器 + 音量滑块 ===== -->
+    <!-- 音色调节面板（低频 / 高频）由 JS 统一注入到每张卡片，避免重复标记 -->
+    <h2 class="group-title">🍃 自然音效</h2>
+    <main class="sound-grid">
+        <!-- 雨声 -->
+        <article class="sound-card" data-sound="rain">
+            <div class="card-head">
+                <div class="card-info">
+                    <span class="icon">🌧️</span>
+                    <h3>雨声</h3>
+                </div>
+                <button class="toggle" aria-label="播放或暂停雨声">
+                    <span class="ico-play"></span>
+                    <span class="ico-pause"><i></i><i></i></span>
+                </button>
+            </div>
+            <div class="eq" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+            <input type="range" class="vol" min="0" max="100" value="70" aria-label="雨声音量">
+        </article>
+
+        <!-- 森林 -->
+        <article class="sound-card" data-sound="forest">
+            <div class="card-head">
+                <div class="card-info">
+                    <span class="icon">🌲</span>
+                    <h3>森林</h3>
+                </div>
+                <button class="toggle" aria-label="播放或暂停森林">
+                    <span class="ico-play"></span>
+                    <span class="ico-pause"><i></i><i></i></span>
+                </button>
+            </div>
+            <div class="eq" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+            <input type="range" class="vol" min="0" max="100" value="70" aria-label="森林音量">
+        </article>
+
+        <!-- 海浪 -->
+        <article class="sound-card" data-sound="ocean">
+            <div class="card-head">
+                <div class="card-info">
+                    <span class="icon">🌊</span>
+                    <h3>海浪</h3>
+                </div>
+                <button class="toggle" aria-label="播放或暂停海浪">
+                    <span class="ico-play"></span>
+                    <span class="ico-pause"><i></i><i></i></span>
+                </button>
+            </div>
+            <div class="eq" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+            <input type="range" class="vol" min="0" max="100" value="70" aria-label="海浪音量">
+        </article>
+
+        <!-- 夏夜虫鸣 -->
+        <article class="sound-card" data-sound="insects">
+            <div class="card-head">
+                <div class="card-info">
+                    <span class="icon">🦗</span>
+                    <h3>夏夜虫鸣</h3>
+                </div>
+                <button class="toggle" aria-label="播放或暂停夏夜虫鸣">
+                    <span class="ico-play"></span>
+                    <span class="ico-pause"><i></i><i></i></span>
+                </button>
+            </div>
+            <div class="eq" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+            <input type="range" class="vol" min="0" max="100" value="70" aria-label="夏夜虫鸣音量">
+        </article>
+
+    </main>
+
+    <!-- ===== 暖氛围：火炉等温暖包裹感的音效 ===== -->
+    <h2 class="group-title">🔥 暖氛围</h2>
+    <section class="sound-grid">
+        <!-- 冬日火炉 -->
+        <article class="sound-card" data-sound="fireplace">
+            <div class="card-head">
+                <div class="card-info">
+                    <span class="icon">🔥</span>
+                    <h3>冬日火炉</h3>
+                </div>
+                <button class="toggle" aria-label="播放或暂停冬日火炉">
+                    <span class="ico-play"></span>
+                    <span class="ico-pause"><i></i><i></i></span>
+                </button>
+            </div>
+            <div class="eq" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+            <input type="range" class="vol" min="0" max="100" value="70" aria-label="冬日火炉音量">
+        </article>
+    </section>
+
+    <!-- ===== 纯色噪声：纯白 / 粉红 / 棕噪，学习专注的基础品类 ===== -->
+    <h2 class="group-title">🎚️ 纯色噪声</h2>
+    <section class="sound-grid">
+        <!-- 白噪音 -->
+        <article class="sound-card" data-sound="white">
+            <div class="card-head">
+                <div class="card-info">
+                    <span class="icon">⚪</span>
+                    <h3>白噪音</h3>
+                </div>
+                <button class="toggle" aria-label="播放或暂停白噪音">
+                    <span class="ico-play"></span>
+                    <span class="ico-pause"><i></i><i></i></span>
+                </button>
+            </div>
+            <div class="eq" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+            <input type="range" class="vol" min="0" max="100" value="70" aria-label="白噪音音量">
+        </article>
+
+        <!-- 粉红噪音 -->
+        <article class="sound-card" data-sound="pink">
+            <div class="card-head">
+                <div class="card-info">
+                    <span class="icon">🌸</span>
+                    <h3>粉红噪音</h3>
+                </div>
+                <button class="toggle" aria-label="播放或暂停粉红噪音">
+                    <span class="ico-play"></span>
+                    <span class="ico-pause"><i></i><i></i></span>
+                </button>
+            </div>
+            <div class="eq" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+            <input type="range" class="vol" min="0" max="100" value="70" aria-label="粉红噪音音量">
+        </article>
+
+        <!-- 棕噪音（布朗噪音） -->
+        <article class="sound-card" data-sound="brown">
+            <div class="card-head">
+                <div class="card-info">
+                    <span class="icon">🟤</span>
+                    <h3>棕噪音</h3>
+                </div>
+                <button class="toggle" aria-label="播放或暂停棕噪音">
+                    <span class="ico-play"></span>
+                    <span class="ico-pause"><i></i><i></i></span>
+                </button>
+            </div>
+            <div class="eq" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+            <input type="range" class="vol" min="0" max="100" value="70" aria-label="棕噪音音量">
+        </article>
+    </section>
+
+    <!-- ===== 预设组合：保存 / 一键加载混音方案 ===== -->
+    <section class="presets">
+        <h2><span>💾</span>预设组合</h2>
+        <div class="preset-list" id="presetList"></div>
+        <div class="preset-save">
+            <input type="text" id="presetName" class="preset-input" maxlength="12" placeholder="给这套混音起个名字" aria-label="预设名称">
+            <button class="chip" id="presetSave" type="button">保存当前</button>
+        </div>
+    </section>
+
+    <!-- ===== 定时关闭区 ===== -->
+    <section class="timer">
+        <h2><span>⏰</span>定时关闭</h2>
+        <div class="chips">
+            <button class="chip" data-min="15" type="button">15 分钟</button>
+            <button class="chip" data-min="30" type="button">30 分钟</button>
+            <button class="chip" data-min="60" type="button">60 分钟</button>
+            <button class="chip chip-cancel" data-cancel type="button">取消</button>
+        </div>
+        <div class="custom-timer">
+            <input type="number" id="customMin" class="custom-input" min="1" max="999" inputmode="numeric" placeholder="自定义分钟数" aria-label="自定义定时分钟数">
+            <button class="chip" id="customApply" type="button">开始</button>
+        </div>
+        <p class="countdown" id="countdown"></p>
+    </section>
+
+    <!-- ===== 底部说明 ===== -->
+    <footer>
+        <p class="foot">🎧 建议佩戴耳机使用<br>所有音效均由 Web Audio API 实时合成，无需网络与音频文件</p>
+    </footer>
+</div>
+
+<!-- 轻提示气泡 -->
+<div class="toast" id="toast"></div>
+
+<script>
+/* =========================================================
+ * 白噪音 · 移动端助眠应用
+ * 技术栈：HTML5 + CSS3 + 原生 JavaScript（Web Audio API）
+ * 音效全部由噪声缓冲 + 滤波器 + 振荡器实时合成，
+ * 不依赖任何外部音频文件，单文件即可离线运行。
+ * ========================================================= */
+
+/* ---------- 一、音效基础配置 ---------- */
+var SOUNDS = {
+    rain:      { name: '雨声',     icon: '🌧️', categories: ['natural'],      ambient: { night: .8,  rain: 1,  warm: 0 } },
+    forest:    { name: '森林',     icon: '🌲', categories: ['natural'],      ambient: { night: .5,  rain: 0,  warm: .1 } },
+    ocean:     { name: '海浪',     icon: '🌊', categories: ['natural'],      ambient: { night: .55, rain: .15, warm: 0 } },
+    insects:   { name: '夏夜虫鸣', icon: '🦗', categories: ['natural'],      ambient: { night: .7,  rain: 0,  warm: 0 } },
+    fireplace: { name: '冬日火炉', icon: '🔥', categories: ['warm'],         ambient: { night: .2,  rain: 0,  warm: 1 } },
+    white:     { name: '白噪音',   icon: '⚪', categories: ['color-noise'],  ambient: { night: 0,   rain: 0,  warm: 0 } },
+    pink:      { name: '粉红噪音', icon: '🌸', categories: ['color-noise'],  ambient: { night: 0,   rain: 0,  warm: 0 } },
+    brown:     { name: '棕噪音',   icon: '🟤', categories: ['color-noise'],  ambient: { night: 0,   rain: 0,  warm: 0 } }
+};
+
+/* 音效分类标签：文字与配色统一由这里驱动（后续新增分类只需在此登记） */
+var CATEGORY_META = {
+    natural:      { label: '自然' },
+    warm:         { label: '暖氛围' },
+    'color-noise':{ label: '纯色噪声' }
+};
+
+/* 音色细调参数：低频 / 高频搁架滤波器的转折频率与可调范围（dB） */
+var TONE = {
+    lowFreq:  250,    // 低频搁架：影响轰鸣、厚度（如火炉低鸣、海浪浪体）
+    highFreq: 3000,   // 高频搁架：影响细碎、明亮感（如虫鸣、雨丝）
+    range:    12      // 每个滑块可调 -12 ~ +12 dB
+};
+
+/* 播放状态：各音效当前音量（0~100），以及正在播放的实例 */
+var state = {
+    volumes:   loadVolumes(),   // 音量配置：优先读取 localStorage 中保存的值
+    tones:     loadTones(),     // 音色配置：id -> { low, high }（单位 dB），同样持久化
+    instances: {},              // id -> { volumeGain, lowShelf, highShelf, fadeGain, nodes, timers, fadeTimer }
+    pausedIds: null,            // 全局暂停时记住的音效列表，用于一键继续（null 表示无可继续）
+    nightMode: loadNightMode()  // 夜间模式（更暗的睡前亮度）：默认开启，可手动关闭
+};
+
+/**
+ * 读取夜间模式设置：只有明确存过 0 才关闭；无记录或存储异常时默认开启
+ * （本应用面向助眠场景，打开页面即处于更暗的睡前亮度）。
+ */
+function loadNightMode() {
+    try {
+        return localStorage.getItem('whiteNoiseNightMode') !== '0';
+    } catch (e) { return true; }
+}
+
+/**
+ * 切换夜间模式：只把页面底色与光晕调得更暗，文字和控件对比度不变。
+ * @param {boolean} enabled - 是否开启
+ * @param {boolean} persist - 是否写入 localStorage（初始化应用时传 false，避免无谓写入）
+ */
+function setNightMode(enabled, persist) {
+    state.nightMode = !!enabled;
+    document.documentElement.classList.toggle('night-mode', state.nightMode);
+    nightModeBtn.setAttribute('aria-pressed', String(state.nightMode));
+    nightModeBtn.textContent = state.nightMode ? '🌙 夜间模式' : '☀️ 普通暗色';
+    nightModeBtn.title = state.nightMode
+        ? '已开启：更暗的睡前亮度，点击关闭'
+        : '已关闭：点击开启更暗的睡前亮度';
+    var themeMeta = document.querySelector('meta[name="theme-color"]');
+    if (themeMeta) {
+        themeMeta.setAttribute('content', state.nightMode ? '#05070c' : '#0d1117');
+    }
+    if (persist) {
+        try {
+            localStorage.setItem('whiteNoiseNightMode', state.nightMode ? '1' : '0');
+        } catch (e) { /* 本地存储不可用时忽略 */ }
+    }
+}
+
+/** 读取 localStorage 中保存的音色配置；没有记录或数据异常时为 0 dB（原声） */
+function loadTones() {
+    var tones = {};
+    var saved = null;
+    try {
+        saved = JSON.parse(localStorage.getItem('whiteNoiseTones'));
+    } catch (e) { /* 存储不可用或数据损坏：忽略 */ }
+    Object.keys(SOUNDS).forEach(function (id) {
+        var s = saved && saved[id];
+        tones[id] = {
+            low:  s ? clampTone(s.low)  : 0,
+            high: s ? clampTone(s.high) : 0
+        };
+    });
+    return tones;
+}
+
+/** 把音色值限制在合法范围内（非法值归 0） */
+function clampTone(v) {
+    v = Math.round(Number(v));
+    if (isNaN(v)) return 0;
+    return Math.min(TONE.range, Math.max(-TONE.range, v));
+}
+
+/**
+ * 读取 localStorage 中保存的各音效音量；没有记录或数据异常时使用默认值 70。
+ * 手机浏览器可能禁用本地存储，因此所有读写都包在 try/catch 里。
+ */
+function loadVolumes() {
+    var defaults = {};
+    Object.keys(SOUNDS).forEach(function (id) { defaults[id] = 70; });   // 默认音量 70
+    try {
+        var saved = JSON.parse(localStorage.getItem('whiteNoiseVolumes'));
+        if (saved && typeof saved === 'object') {
+            Object.keys(defaults).forEach(function (id) {
+                var v = Number(saved[id]);
+                if (!isNaN(v) && v >= 0 && v <= 100) defaults[id] = v;   // 逐项校验，过滤非法值
+            });
+        }
+    } catch (e) { /* 存储不可用或数据损坏：忽略，使用默认值 */ }
+    return defaults;
+}
+
+/* ---------- 二、音频引擎（AudioContext 与噪声缓冲） ---------- */
+
+var audioCtx = null;      // 全局音频上下文（首次用户点击时才创建，兼容移动端自动播放策略）
+var noiseBuffers = null;  // { white, pink, brown } 三种可循环的噪声缓冲
+
+/**
+ * 获取（或首次创建）音频上下文。
+ * 注意：iOS / 安卓浏览器要求 AudioContext 必须在用户手势中创建或恢复，
+ * 本函数只在按钮点击回调里被调用，因此满足该限制。
+ */
+function ensureAudioCtx() {
+    if (!audioCtx) {
+        var AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) {
+            toast('当前浏览器不支持 Web Audio API');
+            return null;
+        }
+        audioCtx = new AC();
+        // 浏览器在后台/锁屏时可能挂起上下文：状态变化且仍有音效在播时，自动尝试恢复
+        audioCtx.onstatechange = function () {
+            if (audioCtx.state !== 'running' && Object.keys(state.instances).length) {
+                var p = audioCtx.resume();
+                if (p && p.catch) p.catch(function () { /* 部分场景需用户手势，忽略失败 */ });
+            }
+        };
+        // 预生成三种噪声缓冲，之后直接循环播放
+        noiseBuffers = {
+            white: makeWhiteNoise(audioCtx, 4),
+            pink:  makePinkNoise(audioCtx, 4),
+            brown: makeBrownNoise(audioCtx, 4)
+        };
+    }
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume();  // 部分浏览器会挂起上下文，需在用户手势中恢复
+    }
+    ensureKeepAlive();      // 保持系统音频会话活跃，锁屏/切后台不中断（见第九节）
+    return audioCtx;
+}
+
+/** 白噪声：每个采样点取均匀分布的随机值（能量在各频段均匀分布） */
+function makeWhiteNoise(ctx, seconds) {
+    var length = ctx.sampleRate * seconds;
+    var buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+    var data = buffer.getChannelData(0);
+    for (var i = 0; i < length; i++) {
+        data[i] = Math.random() * 2 - 1;
+    }
+    return buffer;
+}
+
+/** 粉红噪声：用 Paul Kellet 滤波器把白噪声"染色"（每倍频程能量相等，听感更柔和） */
+function makePinkNoise(ctx, seconds) {
+    var length = ctx.sampleRate * seconds;
+    var buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+    var data = buffer.getChannelData(0);
+    var b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+    for (var i = 0; i < length; i++) {
+        var white = Math.random() * 2 - 1;
+        b0 = 0.99886 * b0 + white * 0.0555179;
+        b1 = 0.99332 * b1 + white * 0.0750759;
+        b2 = 0.96900 * b2 + white * 0.1538520;
+        b3 = 0.86650 * b3 + white * 0.3104856;
+        b4 = 0.55000 * b4 + white * 0.5329522;
+        b5 = -0.7616 * b5 - white * 0.0168980;
+        data[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.11;
+        b6 = white * 0.115926;
+    }
+    return buffer;
+}
+
+/** 棕（布朗）噪声：对白噪声做积分（低通），低频能量很强，适合模拟雷声、浪涌 */
+function makeBrownNoise(ctx, seconds) {
+    var length = ctx.sampleRate * seconds;
+    var buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+    var data = buffer.getChannelData(0);
+    var last = 0;
+    for (var i = 0; i < length; i++) {
+        var white = Math.random() * 2 - 1;
+        last = (last + 0.02 * white) / 1.02;  // 一阶低通积分
+        data[i] = last * 3.5;                 // 放大到合适音量
+    }
+    return buffer;
+}
+
+/** 用噪声缓冲创建一个循环播放的声源节点（传入 when 时延迟启动，用于一次性脉冲） */
+function makeNoiseSource(ctx, buffer, when) {
+    var src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+    src.start(when || 0);
+    return src;
+}
+
+/* ---------- 三、五种音效的合成实现 ---------- */
+/* 每个合成函数都接收 (ctx, dest, buf, inst)：
+ *   ctx  - 音频上下文
+ *   dest - 本音效的输出节点（后面接淡入淡出增益再进扬声器）
+ *   buf  - 预生成的噪声缓冲集合
+ *   inst - 播放实例对象，用于登记需要清理的节点与定时器          */
+
+/** 雨声 = 高频雨丝（白噪声滤波）+ 远处雨幕（棕噪声）+ 随机雨滴敲击 */
+function buildRain(ctx, dest, buf, inst) {
+    // ① 主体雨声：白噪声 → 高通(去掉低频轰鸣) → 低通(压掉尖锐毛刺)
+    var hiss = makeNoiseSource(ctx, buf.white);
+    var hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 500;
+    var lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 7500;
+    var hissGain = ctx.createGain();
+    hissGain.gain.value = 0.5;
+    // 用一个低频正弦振荡器（LFO）调制音量，模拟雨势自然起伏
+    var lfo = ctx.createOscillator();
+    lfo.type = 'sine';
+    lfo.frequency.value = 0.08;   // 约 12 秒一个起伏周期
+    var lfoAmt = ctx.createGain();
+    lfoAmt.gain.value = 0.12;
+    lfo.connect(lfoAmt);
+    lfoAmt.connect(hissGain.gain);
+    hiss.connect(hp);
+    hp.connect(lp);
+    lp.connect(hissGain);
+    hissGain.connect(dest);
+    lfo.start();
+
+    // ② 远处低沉雨幕：棕噪声 → 低通，给雨声加上"厚度"
+    var rumble = makeNoiseSource(ctx, buf.brown);
+    var lp2 = ctx.createBiquadFilter();
+    lp2.type = 'lowpass';
+    lp2.frequency.value = 220;
+    var rumbleGain = ctx.createGain();
+    rumbleGain.gain.value = 0.25;
+    rumble.connect(lp2);
+    lp2.connect(rumbleGain);
+    rumbleGain.connect(dest);
+
+    // ③ 雨滴敲击声：每隔 0.35~1.2 秒随机播放一个短促的高频噪声脉冲
+    var dropTimer = null;
+    function scheduleDrop() {
+        dropTimer = setTimeout(function () {
+            var t = ctx.currentTime;
+            var src = makeNoiseSource(ctx, buf.white, t);   // 一次性脉冲：延迟到 t 再启动
+            var bp = ctx.createBiquadFilter();
+            bp.type = 'bandpass';
+            bp.frequency.value = 1500 + Math.random() * 3000;  // 随机音高
+            bp.Q.value = 10;
+            var g = ctx.createGain();
+            g.gain.setValueAtTime(0.0001, t);
+            g.gain.exponentialRampToValueAtTime(0.1, t + 0.006);   // 极快起音
+            g.gain.exponentialRampToValueAtTime(0.0001, t + 0.07); // 快速衰减
+            src.connect(bp);
+            bp.connect(g);
+            g.connect(dest);
+            src.stop(t + 0.1);
+            // 播完即断开，及时释放资源
+            src.onended = function () { src.disconnect(); bp.disconnect(); g.disconnect(); };
+            scheduleDrop();  // 安排下一次雨滴
+        }, 350 + Math.random() * 850);
+    }
+    scheduleDrop();
+    // 停止时清除雨滴定时器
+    inst.timers.push(function () { clearTimeout(dropTimer); dropTimer = null; });
+    inst.nodes.push(hiss, rumble, lfo, hp, lp, lp2, hissGain, rumbleGain, lfoAmt);
+}
+
+/** 森林 = 林间微风（粉红噪声低通 + 缓慢起伏）+ 随机鸟鸣（正弦扫频） */
+function buildForest(ctx, dest, buf, inst) {
+    // ① 风声：粉红噪声 → 低通，音量随 LFO 缓慢波动
+    var wind = makeNoiseSource(ctx, buf.pink);
+    var lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 420;
+    var windGain = ctx.createGain();
+    windGain.gain.value = 0.5;
+    var lfo = ctx.createOscillator();
+    lfo.type = 'sine';
+    lfo.frequency.value = 0.11;
+    var lfoAmt = ctx.createGain();
+    lfoAmt.gain.value = 0.25;
+    lfo.connect(lfoAmt);
+    lfoAmt.connect(windGain.gain);
+    wind.connect(lp);
+    lp.connect(windGain);
+    windGain.connect(dest);
+    lfo.start();
+
+    // ② 鸟鸣：随机间隔触发，每次 2~4 声"先升后降"的正弦扫频，模拟鸟叫
+    var birdTimer = null;
+    function scheduleBird() {
+        birdTimer = setTimeout(function () {
+            var base = 2200 + Math.random() * 1800;             // 随机基础音高
+            var times = 2 + Math.floor(Math.random() * 3);      // 一次 2~4 连叫
+            var t0 = ctx.currentTime;
+            for (var i = 0; i < times; i++) {
+                (function (offset) {
+                    var t = t0 + offset;
+                    var osc = ctx.createOscillator();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(base, t);
+                    osc.frequency.linearRampToValueAtTime(base * 1.4, t + 0.06);  // 音调上扬
+                    osc.frequency.linearRampToValueAtTime(base * 0.85, t + 0.16); // 音调回落
+                    var g = ctx.createGain();
+                    g.gain.setValueAtTime(0.0001, t);
+                    g.gain.linearRampToValueAtTime(0.15, t + 0.015);
+                    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+                    osc.connect(g);
+                    g.connect(dest);
+                    osc.start(t);
+                    osc.stop(t + 0.22);
+                    osc.onended = function () { osc.disconnect(); g.disconnect(); };
+                })(i * 0.15);
+            }
+            scheduleBird();  // 安排下一次鸟鸣
+        }, 900 + Math.random() * 2600);
+    }
+    scheduleBird();
+    inst.timers.push(function () { clearTimeout(birdTimer); birdTimer = null; });
+    inst.nodes.push(wind, lfo, lp, windGain, lfoAmt);
+}
+
+/** 海浪 = 浪体涌动（棕噪声低通）+ 浪花泡沫（白噪声带通），由同一 LFO 驱动起伏 */
+function buildOcean(ctx, dest, buf, inst) {
+    // 海浪涌动 LFO：约 0.09Hz，即 11 秒一个大浪周期
+    var lfo = ctx.createOscillator();
+    lfo.type = 'sine';
+    lfo.frequency.value = 0.09;
+    lfo.start();
+
+    // ① 主浪体：棕噪声 → 低通，音量随 LFO 大幅起伏（浪来浪去）
+    var body = makeNoiseSource(ctx, buf.brown);
+    var lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 480;
+    var bodyGain = ctx.createGain();
+    bodyGain.gain.value = 0.55;    // 基础音量
+    var lfoBody = ctx.createGain();
+    lfoBody.gain.value = 0.45;     // 波动深度（音量在 0.1 ~ 1.0 之间摆动）
+    lfo.connect(lfoBody);
+    lfoBody.connect(bodyGain.gain);
+    body.connect(lp);
+    lp.connect(bodyGain);
+    bodyGain.connect(dest);
+
+    // ② 浪花泡沫：白噪声 → 带通（高频沙沙声），与浪体同步起伏
+    var foam = makeNoiseSource(ctx, buf.white);
+    var bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 1800;
+    bp.Q.value = 0.6;
+    var foamGain = ctx.createGain();
+    foamGain.gain.value = 0.16;
+    var lfoFoam = ctx.createGain();
+    lfoFoam.gain.value = 0.11;
+    lfo.connect(lfoFoam);
+    lfoFoam.connect(foamGain.gain);
+    foam.connect(bp);
+    bp.connect(foamGain);
+    foamGain.connect(dest);
+
+    inst.nodes.push(lfo, body, foam, lp, bp, bodyGain, foamGain, lfoBody, lfoFoam);
+}
+
+/** 夏夜虫鸣 = 夜风底噪（白噪声高通）+ 细碎蟋蟀鸣叫（正弦脉冲串）+ 偶尔的悠长颤音 + 远处青蛙叫 */
+function buildInsects(ctx, dest, buf, inst) {
+    // ① 夜风底噪：白噪声 → 高通 → 极低音量，给虫鸣垫一层通透的空气感
+    var air = makeNoiseSource(ctx, buf.white);
+    var hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 3500;
+    var airGain = ctx.createGain();
+    airGain.gain.value = 0.02;
+    air.connect(hp);
+    hp.connect(airGain);
+    airGain.connect(dest);
+
+    // ② 蟋蟀鸣叫：随机间隔触发，每次 2~6 声极短的"唧——"（正弦先升后降）
+    var chirpTimer = null;
+    function scheduleChirp() {
+        chirpTimer = setTimeout(function () {
+            var t0 = ctx.currentTime;
+            var times = 2 + Math.floor(Math.random() * 5);              // 一次 2~6 连叫
+            for (var i = 0; i < times; i++) {
+                (function (offset) {
+                    var t = t0 + offset * (0.09 + Math.random() * 0.1);
+                    var base = 3200 + Math.random() * 1600;             // 随机基础音高
+                    var osc = ctx.createOscillator();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(base, t);
+                    osc.frequency.linearRampToValueAtTime(base * 1.1, t + 0.03);  // 音调上扬
+                    osc.frequency.linearRampToValueAtTime(base * 0.92, t + 0.1);  // 音调回落
+                    var g = ctx.createGain();
+                    g.gain.setValueAtTime(0.0001, t);
+                    g.gain.linearRampToValueAtTime(0.09 + Math.random() * 0.06, t + 0.012);  // 快速起音
+                    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.1);                    // 快速衰减
+                    osc.connect(g);
+                    g.connect(dest);
+                    osc.start(t);
+                    osc.stop(t + 0.12);
+                    osc.onended = function () { osc.disconnect(); g.disconnect(); };
+                })(i);
+            }
+            scheduleChirp();   // 安排下一次虫鸣
+        }, 120 + Math.random() * 500);
+    }
+    scheduleChirp();
+
+    // ③ 偶尔一声悠长的"铃虫"颤音（4kHz 正弦 + 快速颤音调制），增加层次
+    var trillTimer = null;
+    function scheduleTrill() {
+        trillTimer = setTimeout(function () {
+            var t = ctx.currentTime;
+            var osc = ctx.createOscillator();
+            osc.type = 'sine';
+            osc.frequency.value = 4000 + Math.random() * 500;
+            var vib = ctx.createOscillator();       // 颤音调制振荡器
+            vib.type = 'sine';
+            vib.frequency.value = 18;               // 每秒颤 18 次
+            var vibAmt = ctx.createGain();
+            vibAmt.gain.value = 60;                 // 频率上下摆动 ±60Hz
+            vib.connect(vibAmt);
+            vibAmt.connect(osc.frequency);
+            var g = ctx.createGain();
+            g.gain.setValueAtTime(0.0001, t);
+            g.gain.linearRampToValueAtTime(0.06, t + 0.05);
+            g.gain.linearRampToValueAtTime(0.05, t + 0.5);
+            g.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
+            osc.connect(g);
+            g.connect(dest);
+            osc.start(t);
+            vib.start(t);
+            osc.stop(t + 0.95);
+            vib.stop(t + 0.95);
+            osc.onended = function () { osc.disconnect(); vib.disconnect(); vibAmt.disconnect(); g.disconnect(); };
+            scheduleTrill();   // 安排下一次颤音
+        }, 1500 + Math.random() * 3500);
+    }
+    scheduleTrill();
+
+    // ④ 远处青蛙叫：随机间隔，每次 1~3 声低频"呱——"（正弦 + 快速音量脉冲调制）
+    var frogTimer = null;
+    function scheduleFrog() {
+        frogTimer = setTimeout(function () {
+            var t0 = ctx.currentTime;
+            var croaks = 1 + Math.floor(Math.random() * 3);            // 一次 1~3 连叫
+            for (var i = 0; i < croaks; i++) {
+                (function (offset) {
+                    var t = t0 + offset * (0.18 + Math.random() * 0.12);
+                    var dur = 0.22 + Math.random() * 0.2;              // 每声 0.22~0.42 秒
+                    var osc = ctx.createOscillator();
+                    osc.type = 'sine';
+                    var base = 130 + Math.random() * 110;              // 随机低沉音高（130~240Hz）
+                    osc.frequency.setValueAtTime(base, t);
+                    osc.frequency.linearRampToValueAtTime(base * 0.82, t + dur);  // 音调缓缓下滑
+                    var lp = ctx.createBiquadFilter();
+                    lp.type = 'lowpass';
+                    lp.frequency.value = 700;                          // 压掉毛刺，声音更圆润
+                    // 音量脉冲调制：20~28Hz 正弦驱动增益，制造"呱呱"的喉音颗粒感
+                    var am = ctx.createOscillator();
+                    am.type = 'sine';
+                    am.frequency.value = 20 + Math.random() * 8;
+                    var amDepth = ctx.createGain();
+                    amDepth.gain.value = 0.18;
+                    var g = ctx.createGain();
+                    am.connect(amDepth);
+                    amDepth.connect(g.gain);
+                    // 起落包络：基准 0.22，叠加 ±0.18 的脉冲摆动
+                    g.gain.setValueAtTime(0.22, t);
+                    g.gain.setValueAtTime(0.22, t + dur - 0.04);
+                    g.gain.linearRampToValueAtTime(0.0001, t + dur);
+                    osc.connect(lp);
+                    lp.connect(g);
+                    g.connect(dest);
+                    osc.start(t);
+                    am.start(t);
+                    osc.stop(t + dur + 0.02);
+                    am.stop(t + dur + 0.02);
+                    osc.onended = function () {
+                        osc.disconnect(); lp.disconnect(); am.disconnect();
+                        amDepth.disconnect(); g.disconnect();
+                    };
+                })(i);
+            }
+            scheduleFrog();   // 安排下一次蛙鸣
+        }, 1500 + Math.random() * 4500);
+    }
+    scheduleFrog();
+
+    inst.timers.push(
+        function () { clearTimeout(chirpTimer); chirpTimer = null; },
+        function () { clearTimeout(trillTimer); trillTimer = null; },
+        function () { clearTimeout(frogTimer); frogTimer = null; }
+    );
+    inst.nodes.push(air, hp, airGain);
+}
+
+/** 冬日火炉 = 柴火低鸣（棕噪声低通）+ 中频"哗啦"底声（粉红噪声带通）+ 随机噼啪爆裂声 */
+function buildFireplace(ctx, dest, buf, inst) {
+    // ① 火堆低鸣：棕噪声 → 低通，闷闷的持续燃烧底声，音量随 LFO 缓慢起伏
+    var rumble = makeNoiseSource(ctx, buf.brown);
+    var lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 180;
+    var rumbleGain = ctx.createGain();
+    rumbleGain.gain.value = 0.5;
+    var lfo = ctx.createOscillator();
+    lfo.type = 'sine';
+    lfo.frequency.value = 0.07;      // 约 14 秒一个起伏周期
+    var lfoAmt = ctx.createGain();
+    lfoAmt.gain.value = 0.15;        // 火势时大时小
+    lfo.connect(lfoAmt);
+    lfoAmt.connect(rumbleGain.gain);
+    rumble.connect(lp);
+    lp.connect(rumbleGain);
+    rumbleGain.connect(dest);
+    lfo.start();
+
+    // ② 中频"哗啦"底声：粉红噪声 → 带通，模拟火苗攒动的空气声
+    var roar = makeNoiseSource(ctx, buf.pink);
+    var bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 900;
+    bp.Q.value = 0.7;
+    var roarGain = ctx.createGain();
+    roarGain.gain.value = 0.1;
+    roar.connect(bp);
+    bp.connect(roarGain);
+    roarGain.connect(dest);
+
+    // ③ 噼啪爆裂：每隔 40~200ms 随机一声高频短噪声脉冲，偶尔搭配低频"砰"
+    var crackTimer = null;
+    function scheduleCrack() {
+        crackTimer = setTimeout(function () {
+            var t = ctx.currentTime;
+
+            // 高频"噼"：白噪声 → 高通，极快起音、极快衰减
+            var src = makeNoiseSource(ctx, buf.white, t);   // 一次性脉冲：延迟到 t 再启动
+            var hp = ctx.createBiquadFilter();
+            hp.type = 'highpass';
+            hp.frequency.value = 1800 + Math.random() * 2500;
+            var g = ctx.createGain();
+            g.gain.setValueAtTime(0.0001, t);
+            g.gain.exponentialRampToValueAtTime(0.08 + Math.random() * 0.18, t + 0.004);
+            g.gain.exponentialRampToValueAtTime(0.0001, t + 0.02 + Math.random() * 0.05);
+            src.connect(hp);
+            hp.connect(g);
+            g.connect(dest);
+            src.stop(t + 0.1);
+            src.onended = function () { src.disconnect(); hp.disconnect(); g.disconnect(); };
+
+            // 偶尔（约 30%）伴随一声低频"砰"：正弦快速下滑 + 衰减，模拟柴火爆开
+            if (Math.random() < 0.3) {
+                var osc = ctx.createOscillator();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(110 + Math.random() * 90, t);
+                osc.frequency.exponentialRampToValueAtTime(55, t + 0.09);
+                var g2 = ctx.createGain();
+                g2.gain.setValueAtTime(0.0001, t);
+                g2.gain.exponentialRampToValueAtTime(0.3, t + 0.006);
+                g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.13);
+                osc.connect(g2);
+                g2.connect(dest);
+                osc.start(t);
+                osc.stop(t + 0.15);
+                osc.onended = function () { osc.disconnect(); g2.disconnect(); };
+            }
+            scheduleCrack();   // 安排下一次爆裂声
+        }, 40 + Math.random() * 160);
+    }
+    scheduleCrack();
+    inst.timers.push(function () { clearTimeout(crackTimer); crackTimer = null; });
+    inst.nodes.push(rumble, roar, lfo, lp, bp, rumbleGain, roarGain, lfoAmt);
+}
+
+/**
+ * 彩色噪声（纯白 / 粉红 / 棕）：直接循环播放预生成的噪声缓冲。
+ * 各色噪声能量分布不同，用 level 把三者的响度拉到相近水平。
+ *   白噪音：各频段能量相等，最"沙沙"明亮，适合遮蔽人声
+ *   粉红噪音：每倍频程能量相等，比白噪音柔和，接近自然雨声
+ *   棕噪音：低频最强，像远处瀑布 / 飞机舱，最沉稳，适合深度专注
+ */
+function makeColorNoiseBuilder(color, level) {
+    return function (ctx, dest, buf, inst) {
+        var src = makeNoiseSource(ctx, buf[color]);
+        var g = ctx.createGain();
+        g.gain.value = level;
+        src.connect(g);
+        g.connect(dest);
+        inst.nodes.push(src, g);
+    };
+}
+
+/* 合成函数注册表：id -> 构建函数 */
+var builders = {
+    rain:      buildRain,
+    forest:    buildForest,
+    ocean:     buildOcean,
+    insects:   buildInsects,
+    fireplace: buildFireplace,
+    white:     makeColorNoiseBuilder('white', 0.18),   // 白噪音高频刺耳，压低一些
+    pink:      makeColorNoiseBuilder('pink',  0.45),
+    brown:     makeColorNoiseBuilder('brown', 0.6)
+};
+
+/* ---------- 四、播放控制（开关 / 音量 / 淡入淡出） ---------- */
+
+/**
+ * 创建一个播放实例：
+ * 每路音效独立一条链路 ——
+ *   声源 → 用户音量增益 → 低频搁架 → 高频搁架 → 淡入淡出增益 → 扬声器，
+ * 多路同时播放时自然叠加混音。
+ */
+function createInstance(id) {
+    var ctx = ensureAudioCtx();
+    if (!ctx) return null;
+
+    var volumeGain = ctx.createGain();
+    // 对音量取平方，让滑块在听感上更线性（人耳对音量呈对数感知）
+    volumeGain.gain.value = Math.pow(state.volumes[id] / 100, 2);
+
+    // 音色细调：低频 / 高频搁架滤波器，增益由「音色调节」滑块控制（0 dB 即原声）
+    var lowShelf = ctx.createBiquadFilter();
+    lowShelf.type = 'lowshelf';
+    lowShelf.frequency.value = TONE.lowFreq;
+    lowShelf.gain.value = state.tones[id].low;
+    var highShelf = ctx.createBiquadFilter();
+    highShelf.type = 'highshelf';
+    highShelf.frequency.value = TONE.highFreq;
+    highShelf.gain.value = state.tones[id].high;
+
+    var fadeGain = ctx.createGain();
+    fadeGain.gain.value = 0;   // 从 0 开始，随后淡入
+
+    volumeGain.connect(lowShelf);
+    lowShelf.connect(highShelf);
+    highShelf.connect(fadeGain);
+    fadeGain.connect(ctx.destination);
+
+    var inst = {
+        id: id,
+        volumeGain: volumeGain,   // 用户音量增益（滑块实时控制）
+        lowShelf: lowShelf,       // 低频搁架（音色调节）
+        highShelf: highShelf,     // 高频搁架（音色调节）
+        fadeGain: fadeGain,       // 淡入淡出增益（开关时渐变，避免爆音）
+        nodes: [volumeGain, lowShelf, highShelf, fadeGain],  // 停止时需要清理的所有音频节点
+        timers: [],               // 停止时需要清除的随机事件定时器
+        fadeTimer: null           // 淡出后真正停止的延时器句柄
+    };
+
+    builders[id](ctx, volumeGain, noiseBuffers, inst); // 声源先接入用户音量增益，滑块才能真正控制音量
+    fadeGain.gain.linearRampToValueAtTime(1, ctx.currentTime + 0.6);  // 0.6 秒淡入
+    return inst;
+}
+
+/** 彻底停止一个实例：清除随机事件定时器、停止并断开所有节点 */
+function stopInstance(inst) {
+    inst.timers.forEach(function (clear) { clear(); });
+    inst.nodes.forEach(function (n) {
+        try { if (typeof n.stop === 'function') n.stop(); } catch (e) { /* 已停止则忽略 */ }
+        try { n.disconnect(); } catch (e) { /* 已断开则忽略 */ }
+    });
+}
+
+/** 开始播放：若实例正在淡出途中被重新打开，则取消淡出并恢复音量 */
+function startSound(id) {
+    var existing = state.instances[id];
+    if (existing) {
+        // 恢复音量（用户快速点按"关→开"的场景）
+        clearTimeout(existing.fadeTimer);
+        var t = audioCtx.currentTime;
+        existing.fadeGain.gain.cancelScheduledValues(t);
+        existing.fadeGain.gain.setValueAtTime(existing.fadeGain.gain.value, t);
+        existing.fadeGain.gain.linearRampToValueAtTime(1, t + 0.3);
+        return;
+    }
+    var inst = createInstance(id);
+    if (inst) state.instances[id] = inst;
+}
+
+/** 停止播放：先 0.6 秒淡出，再真正停止节点（避免突然切断产生爆音） */
+function stopSound(id) {
+    var inst = state.instances[id];
+    if (!inst) return;
+
+    clearTimeout(inst.fadeTimer);   // 取消上一次未完成的淡出延时，避免误删刚恢复播放的实例
+    var t = audioCtx.currentTime;
+    inst.fadeGain.gain.cancelScheduledValues(t);
+    inst.fadeGain.gain.setValueAtTime(inst.fadeGain.gain.value, t);
+    inst.fadeGain.gain.linearRampToValueAtTime(0, t + 0.6);
+
+    inst.fadeTimer = setTimeout(function () {
+        stopInstance(inst);
+        // 若期间没有重新开启，才从状态中移除
+        if (state.instances[id] === inst) {
+            delete state.instances[id];
+            updatePlayingStatus();
+        }
+    }, 700);
+}
+
+/** 切换某个音效的开/关，并同步卡片 UI 与顶部状态文字 */
+function toggleSound(id) {
+    var card = document.querySelector('.sound-card[data-sound="' + id + '"]');
+    // 以卡片 UI 状态判断开关：停止时先淡出 0.6 秒，实例仍留在 state 中，
+    // 若用 state.instances 做依据，图标将无法切回三角形
+    var wasPlaying = card.classList.contains('playing');
+    if (wasPlaying) {
+        stopSound(id);
+    } else {
+        startSound(id);   // 若实例还在淡出途中，startSound 会取消淡出并恢复音量
+        state.pausedIds = null;   // 用户手动开启了新组合，之前的「全部继续」不再适用
+    }
+    card.classList.toggle('playing', !wasPlaying);
+    updatePlayingStatus();
+}
+
+/** 调整音量：滑块实时改变该音效的增益，并更新滑块轨道的填充比例 */
+function setVolume(id, value) {
+    state.volumes[id] = value;
+    try {   // 保存音量配置，下次打开页面自动恢复
+        localStorage.setItem('whiteNoiseVolumes', JSON.stringify(state.volumes));
+    } catch (e) { /* 本地存储不可用时忽略 */ }
+    var slider = document.querySelector('.sound-card[data-sound="' + id + '"] .vol');
+    slider.style.setProperty('--fill', value + '%');
+    var inst = state.instances[id];
+    if (inst && audioCtx) {
+        inst.volumeGain.gain.setTargetAtTime(
+            Math.pow(value / 100, 2),
+            audioCtx.currentTime,
+            0.05   // 平滑过渡，避免滑动时音量跳变
+        );
+    }
+    updateAmbientBackground();   // 音量变化同步影响动态背景的强弱
+}
+
+/** 更新顶部状态文字：显示正在播放的音效列表 */
+function updatePlayingStatus() {
+    var names = [];
+    document.querySelectorAll('.sound-card.playing').forEach(function (card) {
+        names.push(SOUNDS[card.dataset.sound].name);
+    });
+    var canResume = !names.length && state.pausedIds && state.pausedIds.length;
+    statusEl.textContent = names.length
+        ? '正在播放：' + names.join(' · ')
+        : (canResume ? '已全部暂停' : '选择音效，可多选叠加播放');
+
+    // 同步全局按钮：有音效在播 → 「全部暂停」；刚被全局暂停 → 「全部继续」；否则禁用
+    masterBtn.disabled = !names.length && !canResume;
+    masterBtn.classList.toggle('playing', names.length > 0);
+    masterBtn.textContent = canResume ? '▶ 全部继续' : '⏸ 全部暂停';
+
+    updateAmbientBackground();   // 同步动态氛围背景（光晕随播放组合渐显/渐隐）
+}
+
+/** 全局一键暂停 / 继续：暂停时记住正在播放的音效，继续时原样恢复 */
+function toggleMaster() {
+    var playingCards = document.querySelectorAll('.sound-card.playing');
+    if (playingCards.length) {
+        state.pausedIds = [];
+        playingCards.forEach(function (card) {
+            var id = card.dataset.sound;
+            state.pausedIds.push(id);
+            stopSound(id);                    // 沿用单个音效的淡出停止
+            card.classList.remove('playing');
+        });
+        toast('已全部暂停');
+    } else if (state.pausedIds && state.pausedIds.length) {
+        state.pausedIds.forEach(function (id) {
+            startSound(id);                   // 在点击手势内调用，满足移动端音频策略
+            document.querySelector('.sound-card[data-sound="' + id + '"]')
+                .classList.add('playing');
+        });
+        state.pausedIds = null;
+    }
+    updatePlayingStatus();
+}
+
+/* ---------- 四·补充、动态氛围背景（随播放音效渐显的微弱光晕） ---------- */
+
+/** 把数值限制到 0~1 */
+function clamp01(v) {
+    return Math.max(0, Math.min(1, v));
+}
+
+/** 饱和并集合并：多个音效同时播放时贡献累加，但总强度不会超过 1 */
+function combineAmbient(current, contribution) {
+    return 1 - (1 - current) * (1 - contribution);
+}
+
+/**
+ * 计算当前氛围混合：遍历正在播放的卡片（.playing 是 UI 权威状态，
+ * 淡出的 700ms 期间实例仍在 state 中，不能用 state.instances 判断），
+ * 每个音效的贡献 = 元数据系数 × 音量平方（与 createInstance 的感知映射一致）。
+ */
+function getAmbientMix() {
+    var mix = { night: 0, rain: 0, warm: 0 };
+    document.querySelectorAll('.sound-card.playing').forEach(function (card) {
+        var id = card.dataset.sound;
+        var meta = SOUNDS[id] && SOUNDS[id].ambient;
+        if (!meta) return;
+        var weight = Math.pow(state.volumes[id] / 100, 2);
+        ['night', 'rain', 'warm'].forEach(function (channel) {
+            mix[channel] = combineAmbient(mix[channel], (meta[channel] || 0) * weight);
+        });
+    });
+    return mix;
+}
+
+/** 把混合结果写入三层光晕的透明度，并切换漂移动画的激活类 */
+function updateAmbientBackground() {
+    var mix = getAmbientMix();
+    var layers = {
+        night: document.querySelector('.ambient-layer--night'),
+        rain:  document.querySelector('.ambient-layer--rain'),
+        warm:  document.querySelector('.ambient-layer--warm')
+    };
+    ['night', 'rain', 'warm'].forEach(function (channel) {
+        var value = clamp01(mix[channel]);
+        layers[channel].style.opacity = value.toFixed(3);
+        document.body.classList.toggle('ambient-' + channel + '-active', value > 0.001);
+    });
+}
+
+/* ---------- 四·补充、音色细调（低频 / 高频搁架） ---------- */
+
+/**
+ * 调整某个音效的音色：band 为 'low' 或 'high'，value 单位 dB（-12 ~ +12）。
+ * 实时作用于播放中的滤波器，并持久化到 localStorage。
+ */
+function setTone(id, band, value) {
+    value = clampTone(value);
+    state.tones[id][band] = value;
+    try {
+        localStorage.setItem('whiteNoiseTones', JSON.stringify(state.tones));
+    } catch (e) { /* 本地存储不可用时忽略 */ }
+
+    var inst = state.instances[id];
+    if (inst && audioCtx) {
+        var filter = band === 'low' ? inst.lowShelf : inst.highShelf;
+        filter.gain.setTargetAtTime(value, audioCtx.currentTime, 0.05);   // 平滑过渡，避免咔哒声
+    }
+    syncToneUI(id);
+}
+
+/** 同步音色面板的滑块位置、数值文字，以及「音色调节」按钮的高亮状态 */
+function syncToneUI(id) {
+    var card = document.querySelector('.sound-card[data-sound="' + id + '"]');
+    var t = state.tones[id];
+    ['low', 'high'].forEach(function (band) {
+        var slider = card.querySelector('.tone-slider[data-band="' + band + '"]');
+        var v = t[band];
+        slider.value = v;
+        slider.style.setProperty('--fill', ((v + TONE.range) / (TONE.range * 2) * 100) + '%');
+        card.querySelector('.tone-val[data-band="' + band + '"]').textContent =
+            (v > 0 ? '+' : '') + v + ' dB';
+    });
+    card.querySelector('.tone-btn').classList.toggle('tuned', t.low !== 0 || t.high !== 0);
+}
+
+/** 给每张卡片注入音色面板（统一由 JS 生成，避免 HTML 里重复 8 份相同标记） */
+function buildTonePanel(card) {
+    var name = SOUNDS[card.dataset.sound].name;
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'tone-btn';
+    btn.textContent = '🎛 音色调节';
+    btn.setAttribute('aria-expanded', 'false');
+
+    var panel = document.createElement('div');
+    panel.className = 'tone';
+    panel.innerHTML =
+        '<div class="tone-head"><span>低频 · 轰鸣厚度</span><span class="tone-val" data-band="low"></span></div>' +
+        '<input type="range" class="vol tone-slider" data-band="low" min="-' + TONE.range + '" max="' + TONE.range + '" step="1" aria-label="' + name + '低频">' +
+        '<div class="tone-head"><span>高频 · 细碎明亮</span><span class="tone-val" data-band="high"></span></div>' +
+        '<input type="range" class="vol tone-slider" data-band="high" min="-' + TONE.range + '" max="' + TONE.range + '" step="1" aria-label="' + name + '高频">' +
+        '<button type="button" class="tone-reset">恢复原声</button>';
+
+    card.appendChild(btn);
+    card.appendChild(panel);
+}
+
+/** 给卡片注入分类标签（自然 / 暖氛围 / 纯色噪声），文字来自 SOUNDS 元数据 */
+function renderCategoryTags(card) {
+    var cats = (SOUNDS[card.dataset.sound] && SOUNDS[card.dataset.sound].categories) || [];
+    if (!cats.length) return;
+    var existing = card.querySelector('.sound-tags');
+    if (existing) existing.remove();   // 避免重复渲染出现两份标签
+    var wrap = document.createElement('div');
+    wrap.className = 'sound-tags';
+    cats.forEach(function (cat) {
+        var meta = CATEGORY_META[cat];
+        if (!meta) return;             // 容忍未知分类
+        var tag = document.createElement('span');
+        tag.className = 'sound-tag';
+        tag.dataset.category = cat;
+        tag.textContent = meta.label;  // 只用 textContent，杜绝 HTML 注入
+        wrap.appendChild(tag);
+    });
+    card.insertBefore(wrap, card.querySelector('.eq'));   // 插在头部与均衡器之间
+}
+
+/* ---------- 五、定时关闭（15 / 30 / 60 分钟） ---------- */
+
+var timerEndAt = null;         // 定时结束的时间戳（用时间戳计算剩余时间，不怕页面后台被节流）
+var timerInterval = null;      // 每秒刷新倒计时的定时器
+var timerMinutes = null;       // 当前定时分钟数（null 表示未设置）
+var FADE_SECONDS = 10;         // 定时结束前提前淡出的时长（秒），到点时音量正好归零
+var fadingOut = false;         // 是否已开始结束前淡出
+
+/**
+ * 设置或取消定时关闭
+ * @param {number|null} minutes - 分钟数；null 表示取消定时
+ */
+function setTimer(minutes) {
+    cancelSlowFadeOut();   // 重新设定或取消定时时，撤销可能已开始的结束前淡出
+    timerMinutes = minutes;
+
+    if (!minutes) {
+        // 取消定时
+        timerEndAt = null;
+        if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+        countdownEl.classList.remove('show');
+        updateChips();
+        return;
+    }
+
+    timerEndAt = Date.now() + minutes * 60 * 1000;
+    if (timerInterval) clearInterval(timerInterval);
+    timerInterval = setInterval(timerTick, 1000);   // 每秒刷新一次倒计时
+    timerTick();                                    // 立即显示，避免等 1 秒
+    updateChips();
+    toast('已设置 ' + minutes + ' 分钟定时关闭');
+}
+
+/** 撤销结束前淡出：把正在下降的音量平滑拉回正常值（取消定时或重新设定时调用） */
+function cancelSlowFadeOut() {
+    fadingOut = false;
+    Object.keys(state.instances).forEach(function (id) {
+        var inst = state.instances[id];
+        var t = audioCtx.currentTime;
+        inst.fadeGain.gain.cancelScheduledValues(t);
+        inst.fadeGain.gain.setValueAtTime(inst.fadeGain.gain.value, t);
+        inst.fadeGain.gain.linearRampToValueAtTime(1, t + 0.5);
+    });
+}
+
+/** 定时结束前把全部音效缓慢淡出（duration 秒），到点时音量正好归零 */
+function beginSlowFadeOut(duration) {
+    fadingOut = true;
+    Object.keys(state.instances).forEach(function (id) {
+        var inst = state.instances[id];
+        var t = audioCtx.currentTime;
+        inst.fadeGain.gain.cancelScheduledValues(t);
+        inst.fadeGain.gain.setValueAtTime(inst.fadeGain.gain.value, t);
+        inst.fadeGain.gain.linearRampToValueAtTime(0, t + duration);
+    });
+    toast('音量正在缓慢淡出…');
+}
+
+/** 每秒执行：刷新倒计时文字；时间到则执行关闭 */
+function timerTick() {
+    if (!timerEndAt) return;
+    var remain = timerEndAt - Date.now();
+
+    if (remain <= 0) {
+        fireTimer();   // 时间到：停止所有声音
+        return;
+    }
+    // 剩余不足 FADE_SECONDS 秒时开始缓慢淡出，到点时音量正好归零
+    if (remain <= FADE_SECONDS * 1000 && !fadingOut) {
+        beginSlowFadeOut(remain / 1000);
+    }
+    var m = Math.floor(remain / 60000);
+    var s = Math.floor((remain % 60000) / 1000);
+    countdownEl.textContent =
+        '将在 ' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0') + ' 后自动停止';
+    countdownEl.classList.add('show');
+}
+
+/** 定时结束：停止全部音效并复位界面 */
+function fireTimer() {
+    if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+    timerEndAt = null;
+    timerMinutes = null;
+
+    var faded = fadingOut;   // 记录是否已完成结束前淡出
+    fadingOut = false;
+
+    Object.keys(state.instances).forEach(function (id) {
+        document.querySelector('.sound-card[data-sound="' + id + '"]')
+            .classList.remove('playing');
+        if (faded) {
+            // 提前淡出已完成、音量已在 0：直接停止并清理
+            var inst = state.instances[id];
+            clearTimeout(inst.fadeTimer);
+            stopInstance(inst);
+            delete state.instances[id];
+        } else {
+            // 未经过提前淡出（如页面后台被节流、倒计时被跳过）：走常规淡出停止
+            stopSound(id);
+        }
+    });
+    countdownEl.classList.remove('show');
+    updateChips();
+    updatePlayingStatus();
+    toast('⏰ 定时结束，已停止播放');
+}
+
+/** 同步定时按钮的高亮状态 */
+function updateChips() {
+    document.querySelectorAll('.chips .chip').forEach(function (chip) {
+        if (chip.dataset.cancel !== undefined) {
+            // 取消按钮：只有定时生效时才"点亮"
+            chip.classList.toggle('enabled', !!timerMinutes);
+        } else {
+            chip.classList.toggle('active', Number(chip.dataset.min) === timerMinutes);
+        }
+    });
+}
+
+/* ---------- 六、轻提示气泡（toast） ---------- */
+
+var toastTimer = null;
+function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () {
+        toastEl.classList.remove('show');
+    }, 2400);
+}
+
+/* ---------- 七、预设组合（保存 / 一键加载混音方案） ---------- */
+
+var presets = loadPresets();   // 已保存的预设列表，通过 localStorage 持久化
+
+/** 读取本地保存的预设列表（数据异常时返回空数组） */
+function loadPresets() {
+    try {
+        var saved = JSON.parse(localStorage.getItem('whiteNoisePresets'));
+        if (Array.isArray(saved)) return saved;
+    } catch (e) { /* 存储不可用或数据损坏：忽略 */ }
+    return [];
+}
+
+/** 把预设列表写回 localStorage */
+function savePresets() {
+    try {
+        localStorage.setItem('whiteNoisePresets', JSON.stringify(presets));
+    } catch (e) { /* 本地存储不可用时忽略 */ }
+}
+
+/** 渲染预设列表：名称 + 包含的音效摘要 + 加载 / 删除按钮 */
+function renderPresets() {
+    presetListEl.innerHTML = '';
+    if (!presets.length) {
+        presetListEl.innerHTML = '<p class="preset-empty">还没有预设，调好混音后点「保存当前」</p>';
+        return;
+    }
+    presets.forEach(function (p, index) {
+        var onIds = Object.keys(SOUNDS).filter(function (id) {
+            return p.mixes && p.mixes[id] && p.mixes[id].on;
+        });
+        var item = document.createElement('div');
+        item.className = 'preset-item';
+
+        var info = document.createElement('div');
+        info.className = 'preset-info';
+        var nameEl = document.createElement('span');
+        nameEl.className = 'preset-name';
+        nameEl.textContent = p.name;
+        var descEl = document.createElement('span');
+        descEl.className = 'preset-desc';
+        descEl.textContent = onIds.length
+            ? onIds.map(function (id) { return SOUNDS[id].name; }).join(' · ')
+            : '空混音';
+        info.appendChild(nameEl);
+        info.appendChild(descEl);
+
+        var loadBtn = document.createElement('button');
+        loadBtn.className = 'preset-load';
+        loadBtn.type = 'button';
+        loadBtn.textContent = '加载';
+        loadBtn.addEventListener('click', function () { applyPreset(p); });
+
+        var delBtn = document.createElement('button');
+        delBtn.className = 'preset-del';
+        delBtn.type = 'button';
+        delBtn.textContent = '✕';
+        delBtn.setAttribute('aria-label', '删除预设 ' + p.name);
+        delBtn.addEventListener('click', function () {
+            presets.splice(index, 1);
+            savePresets();
+            renderPresets();
+            toast('已删除预设');
+        });
+
+        item.appendChild(info);
+        item.appendChild(loadBtn);
+        item.appendChild(delBtn);
+        presetListEl.appendChild(item);
+    });
+}
+
+/** 一键加载预设：恢复各音效音量，并把预设中的音效置为播放/停止状态 */
+function applyPreset(p) {
+    Object.keys(SOUNDS).forEach(function (id) {
+        var mix = p.mixes && p.mixes[id];
+        var vol = state.volumes[id];
+        if (mix && typeof mix.vol === 'number') {
+            vol = Math.min(100, Math.max(0, Math.round(mix.vol)));
+        }
+        setVolume(id, vol);   // 同步滑块与增益，并写入音量记忆
+        // 恢复音色（旧版预设没有音色字段时按原声处理）
+        setTone(id, 'low',  mix ? mix.low  : 0);
+        setTone(id, 'high', mix ? mix.high : 0);
+        var card = document.querySelector('.sound-card[data-sound="' + id + '"]');
+        var isPlaying = card.classList.contains('playing');
+        var shouldPlay = !!(mix && mix.on);
+        if (shouldPlay && !isPlaying) {
+            startSound(id);
+            card.classList.add('playing');
+        } else if (!shouldPlay && isPlaying) {
+            stopSound(id);
+            card.classList.remove('playing');
+        }
+    });
+    state.pausedIds = null;   // 加载预设即新的组合，清除「全部继续」记忆
+    updatePlayingStatus();
+    toast('已加载预设「' + p.name + '」');
+}
+
+/** 把当前混音（各音效开关 + 音量）存为新预设，最多保存 8 个 */
+function saveCurrentPreset(name) {
+    if (presets.length >= 8) {
+        toast('预设最多保存 8 个，请先删除旧的');
+        return;
+    }
+    var mixes = {};
+    document.querySelectorAll('.sound-card').forEach(function (card) {
+        var id = card.dataset.sound;
+        mixes[id] = {
+            on: card.classList.contains('playing'),
+            vol: Math.round(state.volumes[id]),
+            low: state.tones[id].low,      // 音色也一并保存
+            high: state.tones[id].high
+        };
+    });
+    presets.push({ name: name, mixes: mixes });
+    savePresets();
+    renderPresets();
+    toast('已保存预设「' + name + '」');
+}
+
+/* ---------- 八、事件绑定与初始化 ---------- */
+
+var statusEl = document.getElementById('status');
+var countdownEl = document.getElementById('countdown');
+var toastEl = document.getElementById('toast');
+var presetListEl = document.getElementById('presetList');
+var presetNameEl = document.getElementById('presetName');
+var presetSaveEl = document.getElementById('presetSave');
+var customMinEl = document.getElementById('customMin');
+var customApplyEl = document.getElementById('customApply');
+var masterBtn = document.getElementById('masterBtn');
+var nightModeBtn = document.getElementById('nightModeBtn');
+
+// 全局一键暂停 / 继续
+masterBtn.addEventListener('click', toggleMaster);
+
+// 夜间模式：更暗的睡前亮度（默认开启，可关闭，选择会记住）
+nightModeBtn.addEventListener('click', function () {
+    setNightMode(!state.nightMode, true);
+});
+
+// 音效卡片：开关按钮、音量滑块、音色面板、点击卡片本体切换
+document.querySelectorAll('.sound-card').forEach(function (card) {
+    var id = card.dataset.sound;
+    var toggleBtn = card.querySelector('.toggle');
+    var slider = card.querySelector('.vol');   // 注意：须在注入音色面板前获取，确保拿到的是音量滑块
+
+    buildTonePanel(card);
+    renderCategoryTags(card);
+    var toneBtn = card.querySelector('.tone-btn');
+
+    toggleBtn.addEventListener('click', function () {
+        toggleSound(id);
+    });
+
+    slider.addEventListener('input', function (e) {
+        setVolume(id, Number(e.target.value));
+    });
+
+    // 音色面板：展开 / 收起、低高频滑块、恢复原声
+    toneBtn.addEventListener('click', function () {
+        var open = card.classList.toggle('tone-open');
+        toneBtn.setAttribute('aria-expanded', String(open));
+    });
+    card.querySelectorAll('.tone-slider').forEach(function (s) {
+        s.addEventListener('input', function () {
+            setTone(id, s.dataset.band, Number(s.value));
+        });
+    });
+    card.querySelector('.tone-reset').addEventListener('click', function () {
+        setTone(id, 'low', 0);
+        setTone(id, 'high', 0);
+    });
+    syncToneUI(id);
+
+    // 点击卡片任意位置也可以切换播放（点按钮、滑块、音色面板时不触发）
+    card.addEventListener('click', function (e) {
+        if (e.target.closest('.toggle, .vol, .tone-btn, .tone')) return;
+        toggleSound(id);
+    });
+});
+
+// 定时按钮：15 / 30 / 60 分钟以及取消（只绑定档位区内的按钮，避免误绑自定义/保存按钮）
+document.querySelectorAll('.chips .chip').forEach(function (chip) {
+    chip.addEventListener('click', function () {
+        if (chip.dataset.cancel !== undefined) {
+            setTimer(null);                        // 取消定时
+        } else {
+            setTimer(Number(chip.dataset.min));    // 设置定时
+        }
+    });
+});
+
+// 预设组合：保存当前混音（点按钮或输入框回车）
+presetSaveEl.addEventListener('click', function () {
+    var name = presetNameEl.value.trim() || '我的混音';
+    presetNameEl.value = '';
+    saveCurrentPreset(name);
+});
+presetNameEl.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') presetSaveEl.click();
+});
+
+// 自定义定时：输入任意分钟数，回车或点「开始」生效
+function applyCustomTimer() {
+    var min = Math.round(Number(customMinEl.value));
+    if (!min || min <= 0) {
+        toast('请输入有效的分钟数');
+        return;
+    }
+    min = Math.min(min, 999);
+    customMinEl.value = '';
+    setTimer(min);
+}
+customApplyEl.addEventListener('click', applyCustomTimer);
+customMinEl.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') applyCustomTimer();
+});
+
+// 初始化各滑块的数值与轨道填充
+Object.keys(SOUNDS).forEach(function (id) {
+    var slider = document.querySelector('.sound-card[data-sound="' + id + '"] .vol');
+    slider.value = state.volumes[id];
+    slider.style.setProperty('--fill', state.volumes[id] + '%');
+});
+
+renderPresets();        // 渲染已保存的预设列表
+setNightMode(state.nightMode, false);   // 应用初始夜间模式并同步主题色（不重复写存储）
+updatePlayingStatus();  // 初始化全局按钮状态与动态背景（无音效时禁用）
+
+/* ---------- 九、后台播放保活（切标签页 / 锁屏不中断） ---------- */
+/* 部分浏览器（尤其 iOS Safari 锁屏）会在后台挂起音频上下文，导致声音中断。
+ * 三重保活：
+ *   ① 循环播放一段几乎听不见的静音 WAV（<audio> 元素），保持系统音频会话活跃；
+ *   ② 监听 visibilitychange / focus / pageshow，页面回到前台时立即恢复上下文；
+ *   ③ 每 30 秒看门狗巡检，兜底恢复被挂起的上下文。 */
+
+var keepAliveEl = null;
+
+/** 生成 1 秒 8kHz 单声道的极轻微噪声 WAV（音量近 0，听不见但足以保持音频会话） */
+function makeKeepAliveSrc() {
+    var sampleRate = 8000, seconds = 1, n = sampleRate * seconds;
+    var buf = new ArrayBuffer(44 + n);
+    var view = new DataView(buf);
+    function wstr(off, s) {
+        for (var i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
+    }
+    wstr(0, 'RIFF');
+    view.setUint32(4, 36 + n, true);
+    wstr(8, 'WAVE');
+    wstr(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);          // PCM 编码
+    view.setUint16(22, 1, true);          // 单声道
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate, true);
+    view.setUint16(32, 1, true);
+    view.setUint16(34, 8, true);          // 8 位采样
+    wstr(36, 'data');
+    view.setUint32(40, n, true);
+    for (var i = 0; i < n; i++) {
+        view.setUint8(44 + i, 128 + Math.round(Math.random() * 2 - 1));   // 幅度仅 ±1/255
+    }
+    return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+
+/** 启动静音保活：在用户手势（首次点击播放）内调用，满足浏览器自动播放策略 */
+function ensureKeepAlive() {
+    if (!keepAliveEl) {
+        keepAliveEl = new Audio(makeKeepAliveSrc());
+        keepAliveEl.loop = true;
+        keepAliveEl.volume = 0.01;   // 再压一档，确保完全听不见
+    }
+    if (keepAliveEl.paused) {
+        var p = keepAliveEl.play();
+        if (p && p.catch) p.catch(function () { /* 自动播放被拦截时静默忽略 */ });
+    }
+}
+
+/** 恢复音频：上下文被挂起时尝试 resume，保活音频被暂停时续播 */
+function refreshAudio() {
+    if (audioCtx && audioCtx.state !== 'running' && Object.keys(state.instances).length) {
+        var p = audioCtx.resume();
+        if (p && p.catch) p.catch(function () { /* 部分场景需用户手势，忽略失败 */ });
+    }
+    if (keepAliveEl && keepAliveEl.paused) {
+        var p2 = keepAliveEl.play();
+        if (p2 && p2.catch) p2.catch(function () {});
+    }
+}
+
+// 页面重新可见 / 窗口重新获得焦点时恢复（覆盖锁屏解锁、切回标签页等场景）
+document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) refreshAudio();
+});
+window.addEventListener('focus', refreshAudio);
+window.addEventListener('pageshow', refreshAudio);
+setInterval(refreshAudio, 30000);   // 看门狗：兜底恢复被挂起的上下文
+</script>
+</body>
+</html>
